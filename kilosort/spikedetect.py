@@ -213,7 +213,7 @@ def run(ops, bfile, device=torch.device('cuda'), progress_bar=None,
         ops['wPCA'], ops['wTEMP'] = get_waves(ops, device=device)
 
     ops = template_centers(ops)
-    [ys, xs] = np.meshgrid(ops['yup'], ops['xup'])
+    [ys, xs] = np.meshgrid(np.unique(ops['yup']), np.unique(ops['xup']))
     ys, xs = ys.flatten(), xs.flatten()
     xc, yc = ops['xc'], ops['yc']
     Nfilt = len(ys)

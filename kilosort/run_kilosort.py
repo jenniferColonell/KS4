@@ -151,8 +151,9 @@ def run_kilosort(settings, probe=None, probe_name=None, filename=None,
     # NOTE: This modifies settings in-place
     filename, data_dir, results_dir, probe = \
         set_files(settings, filename, probe, probe_name, data_dir, results_dir, bad_channels)
+    
     setup_logger(results_dir)
-
+    
     try:
         logger.info(f"Kilosort version {kilosort.__version__}")
         logger.info(f"Sorting {filename}")
@@ -206,13 +207,14 @@ def run_kilosort(settings, probe=None, probe_name=None, filename=None,
             ops, device, tic0=tic0, progress_bar=progress_bar,
             file_object=file_object, clear_cache=clear_cache,
             )
-
+        
         # Check scale of data for log file
         b1 = bfile.padded_batch_to_torch(0).cpu().numpy()
         logger.debug(f"First batch min, max: {b1.min(), b1.max()}")
 
         if save_preprocessed_copy:
             io.save_preprocessing(results_dir / 'temp_wh.dat', ops, bfile)
+            np.save(results_dir/'datashift_st0.np',st0)
 
         # Sort spikes and save results
         st,tF, _, _ = detect_spikes(
@@ -305,15 +307,21 @@ def setup_logger(results_dir):
     # In summary: only send logging.debug statements to log file, not console.
 
     # set up logging to file for root logger
+    
+    # check logging file name
+    log_path = Path(results_dir).joinpath('kilosort4.log')
+    print(log_path)    
     logging.basicConfig(level=logging.DEBUG,
                         format='%(asctime)s %(name)-12s %(levelname)-8s %(message)s',
                         datefmt='%m-%d %H:%M',
-                        filename=results_dir/'kilosort4.log',
-                        filemode='w')
+                        filename=log_path,
+                        filemode='w',
+                        force=True)
 
     # define a Handler which writes INFO messages or higher to the sys.stderr
     console = logging.StreamHandler()
-    console.setLevel(logging.INFO)
+    #console.setLevel(logging.INFO)
+    console.setLevel(logging.DEBUG)  #JIC setting console to DEBUG level because file isn't  written if KS4 does not comp
     # set a format which is simpler for console use
     console_formatter = logging.Formatter('%(name)-12s: %(message)s')
     console.setFormatter(console_formatter)
@@ -327,6 +335,7 @@ def setup_logger(results_dir):
 
     mpl_log = logging.getLogger('matplotlib')
     mpl_log.setLevel(logging.INFO)
+    logger.info(f"Kilosort version {kilosort.__version__}")
 
 
 def initialize_ops(settings, probe, data_dtype, do_CAR, invert_sign,
@@ -520,6 +529,7 @@ def compute_drift_correction(ops, device, tic0=np.nan, progress_bar=None,
     ops, st = datashift.run(ops, bfile, device=device, progress_bar=progress_bar,
                             clear_cache=clear_cache)
     bfile.close()
+        
     logger.info(f'drift computed in {time.time()-tic : .2f}s; ' + 
                 f'total {time.time()-tic0 : .2f}s')
     if st is not None:
