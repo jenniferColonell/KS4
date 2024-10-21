@@ -3,6 +3,7 @@ from pathlib import Path
 import pprint
 import logging
 import warnings
+import platform
 logger = logging.getLogger(__name__)
 
 import numpy as np
@@ -21,13 +22,20 @@ from kilosort import (
     PROBE_DIR
 )
 from kilosort.parameters import DEFAULT_SETTINGS
+from kilosort.utils import log_performance, log_cuda_details
+
+RECOGNIZED_SETTINGS = list(DEFAULT_SETTINGS.keys())
+RECOGNIZED_SETTINGS.extend([
+    'filename', 'data_dir', 'results_dir', 'probe_name', 'probe_path'
+])
 
 
 def run_kilosort(settings, probe=None, probe_name=None, filename=None,
                  data_dir=None, file_object=None, results_dir=None,
                  data_dtype=None, do_CAR=True, invert_sign=False, device=None,
                  progress_bar=None, save_extra_vars=False, clear_cache=False,
-                 save_preprocessed_copy=False, bad_channels=None):
+                 save_preprocessed_copy=False, bad_channels=None,
+                 verbose_console=False):
     """Run full spike sorting pipeline on specified data.
     
     Parameters
@@ -96,6 +104,10 @@ def run_kilosort(settings, probe=None, probe_name=None, filename=None,
         A list of channel indices (rows in the binary file) that should not be
         included in sorting. Listing channels here is equivalent to excluding
         them from the probe dictionary.
+    verbose_console : bool; default=False.
+        If True, set logging level for console output to `DEBUG` instead
+        of `INFO`, so that additional information normally only saved to the
+        log file will also show up in real time while sorting.
     
     Raises
     ------
@@ -151,15 +163,34 @@ def run_kilosort(settings, probe=None, probe_name=None, filename=None,
     # NOTE: This modifies settings in-place
     filename, data_dir, results_dir, probe = \
         set_files(settings, filename, probe, probe_name, data_dir, results_dir, bad_channels)
-    
-    setup_logger(results_dir)
-    
+
+    setup_logger(results_dir, verbose_console=verbose_console)
+
+
     try:
         logger.info(f"Kilosort version {kilosort.__version__}")
-        logger.info(f"Sorting {filename}")
-        if clear_cache:
-            logger.info('clear_cache=True')
+        logger.info(f"Python version {platform.python_version()}")
         logger.info('-'*40)
+
+        logger.info('System information:')
+        logger.info(f'{platform.platform()} {platform.machine()}')
+        logger.info(platform.processor())
+        if device is None:
+            if torch.cuda.is_available():
+                logger.info('Using GPU for PyTorch computations. '
+                            'Specify `device` to change this.')
+                device = torch.device('cuda')
+            else:
+                logger.info('Using CPU for PyTorch computations. '
+                            'Specify `device` to change this.')
+                device = torch.device('cpu')
+
+        if device != torch.device('cpu'):
+            memory = torch.cuda.get_device_properties(device).total_memory/1024**3
+            logger.info(f'Using CUDA device: {torch.cuda.get_device_name()} {memory:.2f}GB')
+
+        logger.info('-'*40)
+        logger.info(f"Sorting {filename}")
 
         if data_dtype is None:
             logger.info(
@@ -170,16 +201,8 @@ def run_kilosort(settings, probe=None, probe_name=None, filename=None,
 
         if not do_CAR:
             logger.info("Skipping common average reference.")
-
-        if device is None:
-            if torch.cuda.is_available():
-                logger.info('Using GPU for PyTorch computations. '
-                            'Specify `device` to change this.')
-                device = torch.device('cuda')
-            else:
-                logger.info('Using CPU for PyTorch computations. '
-                            'Specify `device` to change this.')
-                device = torch.device('cpu')
+        if clear_cache:
+            logger.info('clear_cache=True')
 
         if probe['chanMap'].max() >= settings['n_chan_bin']:
             raise ValueError(
@@ -231,7 +254,12 @@ def run_kilosort(settings, probe=None, probe_name=None, filename=None,
                 save_extra_vars=save_extra_vars,
                 save_preprocessed_copy=save_preprocessed_copy
                 )
-    except:
+    except Exception as e:
+        if isinstance(e, torch.cuda.OutOfMemoryError):
+            logger.exception('Out of memory error, printing performance...')
+            log_performance(logger, level='info')
+            log_cuda_details(logger)
+
         # This makes sure the full traceback is written to log file.
         logger.exception('Encountered error in `run_kilosort`:')
         # Annoyingly, this will print the error message twice for console, but
@@ -301,7 +329,7 @@ def set_files(settings, filename, probe, probe_name,
     return filename, data_dir, results_dir, probe
 
 
-def setup_logger(results_dir):
+def setup_logger(results_dir, verbose_console=False):
     # Adapted from
     # https://docs.python.org/2/howto/logging-cookbook.html#logging-to-multiple-destinations
     # In summary: only send logging.debug statements to log file, not console.
@@ -309,19 +337,20 @@ def setup_logger(results_dir):
     # set up logging to file for root logger
     
     # check logging file name
-    log_path = Path(results_dir).joinpath('kilosort4.log')
-    print(log_path)    
+   
     logging.basicConfig(level=logging.DEBUG,
                         format='%(asctime)s %(name)-12s %(levelname)-8s %(message)s',
                         datefmt='%m-%d %H:%M',
-                        filename=log_path,
-                        filemode='w',
-                        force=True)
+                        filename=results_dir/'kilosort4.log',
+                        filemode='w', force=True)
 
     # define a Handler which writes INFO messages or higher to the sys.stderr
     console = logging.StreamHandler()
-    #console.setLevel(logging.INFO)
-    console.setLevel(logging.DEBUG)  #JIC setting console to DEBUG level because file isn't  written if KS4 does not comp
+    if verbose_console:
+        console.setLevel(logging.DEBUG)
+    else:
+        console.setLevel(logging.INFO)
+
     # set a format which is simpler for console use
     console_formatter = logging.Formatter('%(name)-12s: %(message)s')
     console.setFormatter(console_formatter)
@@ -362,6 +391,18 @@ def initialize_ops(settings, probe, data_dtype, do_CAR, invert_sign,
             """
         warnings.warn(msg, DeprecationWarning)
     dup_bins = int(settings['duplicate_spike_ms'] * (settings['fs']/1000))
+
+    # Raise an error if there are unrecognized settings entries to make users
+    # aware if they've made a typo, are using a deprecated setting, etc.
+    unrecognized = []
+    for k, _ in settings.items():
+        if k not in RECOGNIZED_SETTINGS:
+            unrecognized.append(k)
+    if len(unrecognized) > 0:
+        logger.info('Unrecognized keys found in `settings`')
+        logger.info('See `kilosort.run_kilosort.RECOGNIZED_SETTINGS`')
+        raise ValueError(f'Unrecognized settings: {unrecognized}')
+
 
     # TODO: Clean this up during refactor. Lots of confusing duplication here.
     ops = settings  
@@ -474,6 +515,8 @@ def compute_preprocessing(ops, device, tic0=np.nan, file_object=None):
     logger.debug(f'hp_filter shape: {hp_filter.shape}')
     logger.debug(f'whiten_mat shape: {whiten_mat.shape}')
 
+    log_performance(logger, 'info', 'Resource usage after preprocessing')
+
     return ops
 
 
@@ -546,6 +589,9 @@ def compute_drift_correction(ops, device, tic0=np.nan, progress_bar=None,
         artifact_threshold=artifact, shift=shift, scale=scale,
         file_object=file_object
         )
+
+    log_performance(logger, 'info', 'Resource usage after drift correction')
+    log_cuda_details(logger)
 
     return ops, bfile, st
 
@@ -627,6 +673,9 @@ def detect_spikes(ops, device, bfile, tic0=np.nan, progress_bar=None,
     logger.debug(f'iCC shape: {ops["iCC"].shape}')
     logger.debug(f'iU shape: {ops["iU"].shape}')
 
+    log_performance(logger, 'info', 'Resource usage after spike detection')
+    log_cuda_details(logger)
+
     return st, tF, Wall, clu
 
 
@@ -689,6 +738,9 @@ def cluster_spikes(st, tF, ops, device, bfile, tic0=np.nan, progress_bar=None,
     logger.debug(f'Wall shape: {Wall.shape}')
 
     bfile.close()
+
+    log_performance(logger, 'info', 'Resource usage after clustering')
+    log_cuda_details(logger)
 
     return clu, Wall
 
@@ -775,6 +827,9 @@ def save_sorting(ops, results_dir, st, clu, tF, Wall, imin, tic0=np.nan,
     ops['runtime'] = runtime 
     io.save_ops(ops, results_dir)
     logger.info(f'Sorting output saved in: {results_dir}.')
+
+    log_performance(logger, 'info', 'Resource usage after saving')
+    log_cuda_details(logger)
 
     return ops, similar_templates, is_ref, est_contam_rate, kept_spikes
 
