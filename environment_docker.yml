@@ -1,8 +1,8 @@
 name: kilosort
-channels:
-  - conda-forge
+channels:  
   - pytorch
   - nvidia
+  - conda-forge
 dependencies:
   - python=3.9.*
   - pip
@@ -17,6 +17,7 @@ dependencies:
   - pytest
   # CUDA
   - pytorch
+  - torchvision
   - pynvml
   # GUI
   - matplotlib
