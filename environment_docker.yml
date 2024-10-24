@@ -16,8 +16,6 @@ dependencies:
   - libblas=*=*mkl
   - pytest
   # CUDA
-  - pytorch
-  - torchvision
   - pynvml
   # GUI
   - matplotlib
