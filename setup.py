@@ -2,14 +2,15 @@ import setuptools
 from setuptools import setup
 
 install_deps = [
-    'numpy>=1.20.0,<2.0.0',
+    'numpy>=1.20.0',
     'scipy',
     'scikit-learn',
     'tqdm',
-    'torch>=1.6',
+    'torch>=2.1.0',
     'numba',
     'faiss-cpu',
-    'psutil'
+    'psutil',
+    'matplotlib'
 ]
 
 gui_deps = [
@@ -17,7 +18,6 @@ gui_deps = [
     'qtpy',
     'pyqt6',
     'pyqt6.sip',
-    'matplotlib'
 ]
 
 docs_deps = [
@@ -68,6 +68,7 @@ with open("README.md", "r") as fh:
 
 setup(
     name="kilosort",
+    python_requires='>=3.9',
     license="BSD",
     author="Marius Pachitariu",
     author_email="pachitarium@janelia.hhmi.org",

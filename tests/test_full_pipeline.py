@@ -13,15 +13,20 @@ def test_pipeline(data_directory, results_directory, saved_ops, torch_device, ca
         # Should result in an error, since `n_chan_bin` isn't specified.
         ops, st, clu, _, _, _, _, _, kept_spikes = run_kilosort(
             settings={}, filename=bin_file, device=torch_device,
-            probe_name='neuropixPhase3B1_kilosortChanMap.mat',
+            probe_name='NeuroPix1_default.mat',
             )
 
     with capture_mgr.global_and_fixture_disabled():
+        # NOTE: 'cluster_downsampling' and 'max_cluster_subset' are set to be
+        #       equivalent to their default behavior prior to version 4.1.0,
+        #       since that was how the test results were generated.
         print('\nStarting run_kilosort test...')
         ops, st, clu, _, _, _, _, _, kept_spikes = run_kilosort(
             filename=bin_file, device=torch_device,
-            settings={'n_chan_bin': 385},
-            probe_name='neuropixPhase3B1_kilosortChanMap.mat',
+            settings={'n_chan_bin': 385, 'cluster_downsampling': 20,
+                      'max_cluster_subset': None},
+            probe_name='NeuroPix1_default.mat',
+            verbose_console=True
             )
 
     st = st[kept_spikes,0]  # only first column is spike times

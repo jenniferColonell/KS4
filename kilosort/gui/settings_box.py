@@ -10,8 +10,8 @@ from qtpy import QtCore, QtWidgets, QtGui
 from scipy.io.matlab.miobase import MatReadError
 
 from kilosort.gui.logger import setup_logger
-from kilosort.gui.minor_gui_elements import ProbeBuilder, create_prb
-from kilosort.io import load_probe, BinaryRWFile
+from kilosort.gui.minor_gui_elements import ProbeBuilder
+from kilosort.io import load_probe, save_probe, BinaryRWFile
 from kilosort.parameters import MAIN_PARAMETERS, EXTRA_PARAMETERS
 
 
@@ -19,6 +19,14 @@ logger = setup_logger(__name__)
 
 _DEFAULT_DTYPE = 'int16'
 _ALLOWED_FILE_TYPES = ['.bin', '.dat', '.bat', '.raw']  # For binary data
+_PROBE_SETTINGS = [
+    'nearest_chans', 'dmin', 'dminx', 'max_channel_distance', 'x_centers'
+    ]
+_NONE_ALLOWED = [
+    'dmin', 'nt0min', 'x_centers', 'shift', 'scale', 'max_channel_distance',
+    'max_cluster_subset'
+    ]
+
 
 class SettingsBox(QtWidgets.QGroupBox):
     settingsUpdated = QtCore.Signal()
@@ -30,15 +38,22 @@ class SettingsBox(QtWidgets.QGroupBox):
 
         self.gui = parent
         self.load_enabled = False
-        self.use_file_object = False
+        self.use_file_object = self.gui.qt_settings.value('load_as_wrapper')
+        # Toggled to avoid excessive settings checks, like when resetting all
+        # parameters to their defaults.
+        self.pause_checks = False
+        self.path_check = None
         
         self.select_data_file = QtWidgets.QPushButton("Select Binary File")
         self.data_file_path = self.gui.data_path
         if self.data_file_path is not None:
-            self.data_file_path = self.data_file_path.resolve()
+            path = self.data_file_path
+            if not isinstance(path, list): path = [path]
+            path = [p.resolve().as_posix() for p in path]
+        else:
+            path = None
         self.data_file_path_input = QtWidgets.QLineEdit(
-            self.data_file_path.as_posix()
-            if self.data_file_path is not None else None
+            str(path) if path is not None else None
             )
         
         if not self.gui.qt_settings.contains('last_data_location'):
@@ -50,7 +65,7 @@ class SettingsBox(QtWidgets.QGroupBox):
 
         self.results_directory_path = self.gui.results_directory
         if self.data_file_path is not None and self.results_directory_path is None:
-            self.results_directory_path = self.data_file_path.parent.joinpath('kilosort4/')
+            self.results_directory_path = self.data_file_path[0].parent.joinpath('kilosort4/')
 
         self.select_results_directory = QtWidgets.QPushButton(
             "Select Results Dir."
@@ -78,6 +93,21 @@ class SettingsBox(QtWidgets.QGroupBox):
         else:
             self.bad_channels = []
 
+        self.shank_idx_text = QtWidgets.QLabel("Shank Index:")
+        self.shank_idx_input = QtWidgets.QLineEdit()
+        if self.gui.qt_settings.contains('shank_idx'):
+            idx = self.gui.qt_settings.value('shank_idx')
+            if isinstance(idx, str):
+                self.shank_idx = float(idx)
+            elif isinstance(idx, list):
+                self.shank_idx = [float(s) for s in idx]
+            else:
+                self.shank_idx = idx
+        else:
+            self.shank_idx = None
+        self.shank_idx_input.setText(str(self.shank_idx))
+
+
         self.dtype_selector_text = QtWidgets.QLabel("Data dtype:")
         self.dtype_selector = QtWidgets.QComboBox()
         self.populate_dtype_selector()
@@ -98,6 +128,7 @@ class SettingsBox(QtWidgets.QGroupBox):
 
         self.extra_parameters_window = ExtraParametersWindow(self)
         self.extra_parameters_button = QtWidgets.QPushButton('Extra settings')
+        self.revert_parameters_button = QtWidgets.QPushButton('Use default settings')
         self.import_settings_button = QtWidgets.QPushButton('Import')
         self.export_settings_button = QtWidgets.QPushButton('Export')
 
@@ -129,9 +160,11 @@ class SettingsBox(QtWidgets.QGroupBox):
             self.probe_layout_selector.setCurrentText(self.probe_name)
         if self.probe_layout is not None:
             self.enable_preview_probe()
+        if self.gui.qt_settings.value('load_as_wrapper'):
+            # Don't try to validate binary path if it's an external file format.
+            self.path_check = True
         if self.check_valid_binary_path(self.data_file_path):
-            if self.check_settings():
-                self.enable_load()
+            self.check_load()
 
 
     def setup(self):
@@ -202,7 +235,7 @@ class SettingsBox(QtWidgets.QGroupBox):
 
         row_count += rspan
         layout.addWidget(self.probe_layout_selector, row_count, col1, rspan, dbl)
-        self.probe_layout_selector.currentTextChanged.connect(
+        self.probe_layout_selector.textActivated.connect(
             self.on_probe_layout_selected
         )
 
@@ -214,6 +247,18 @@ class SettingsBox(QtWidgets.QGroupBox):
             "A list of channel indices (rows in the binary file) that should "
             "not be included in sorting.\nListing channels here is equivalent to "
             "excluding them from the probe dictionary."
+            )
+
+        row_count += rspan
+        layout.addWidget(self.shank_idx_text, row_count, col1, rspan, cspan1)
+        layout.addWidget(self.shank_idx_input, row_count, col2, rspan, cspan2)
+        self.shank_idx_input.editingFinished.connect(self.update_shank_idx)
+        self.shank_idx_text.setToolTip(
+            "If not None, only channels from the specified shank index will be used. "
+            "If a list is provided, each shank will be sorted sequentially and results "
+            "will be saved in separate subfolders. Note that the shank_idx value(s) "
+            "must match the actual value specified in `probe['kcoords']`. For example, "
+            "`probe_idx=0` will not work if `probe['kcoords']` uses 1,2,3,4."
             )
 
 
@@ -246,14 +291,22 @@ class SettingsBox(QtWidgets.QGroupBox):
                 )
             inp = getattr(self, f'{k}_input')
             inp.editingFinished.connect(self.update_parameter)
+            if k in _PROBE_SETTINGS:
+                inp.editingFinished.connect(self.show_probe_layout())
 
         row_count += rspan
         layout.addWidget(
-            self.extra_parameters_button, row_count, col1, rspan, dbl
+            self.extra_parameters_button, row_count, col1, rspan, cspan1
             )
         self.extra_parameters_button.clicked.connect(
             lambda x: self.extra_parameters_window.show()
             )
+        layout.addWidget(
+            self.revert_parameters_button, row_count, col2, rspan, cspan2
+        )
+        self.revert_parameters_button.clicked.connect(
+            self.set_default_field_values
+        )
         
         row_count += rspan
         layout.addWidget(
@@ -271,7 +324,12 @@ class SettingsBox(QtWidgets.QGroupBox):
         self.update_settings()
 
     def set_default_field_values(self):
+        self.pause_checks = True
+
+        self.bad_channels_input.setText('')
+        self.bad_channels_input.editingFinished.emit()
         self.dtype_selector.setCurrentText(_DEFAULT_DTYPE)
+        self.dtype_selector.currentTextChanged.emit(_DEFAULT_DTYPE)
         epw = self.extra_parameters_window
         for k, p in MAIN_PARAMETERS.items():
             getattr(self, f'{k}_input').setText(str(p['default']))
@@ -280,8 +338,13 @@ class SettingsBox(QtWidgets.QGroupBox):
             getattr(epw, f'{k}_input').setText(str(p['default']))
             getattr(epw, f'{k}_input').editingFinished.emit()
 
+        self.pause_checks = False
+        self.check_load()
+        
+
     def set_cached_field_values(self):
         # Only run during setup, so that resetting gui always goes to defaults.
+        self.pause_checks = True
         if self.gui.qt_settings.contains('data_dtype'):
             dtype = self.gui.qt_settings.value('data_dtype')
             self.dtype_selector.setCurrentText(dtype)
@@ -310,6 +373,9 @@ class SettingsBox(QtWidgets.QGroupBox):
                 d = str(p['default'])
             getattr(epw, f'{k}_input').setText(d)
             getattr(epw, f'{k}_input').editingFinished.emit()
+
+        self.pause_checks = False
+        self.check_load()
 
     @QtCore.Slot()
     def import_settings(self):
@@ -372,29 +438,28 @@ class SettingsBox(QtWidgets.QGroupBox):
 
     def on_select_data_file_clicked(self):
         file_dialog_options = QtWidgets.QFileDialog.DontUseNativeDialog
-        data_file_name, _ = QtWidgets.QFileDialog.getOpenFileName(
+        data_file_name, _ = QtWidgets.QFileDialog.getOpenFileNames(
             parent=self,
-            caption="Choose data file to load...",
+            caption="Choose data file(s) to load...",
             directory=self.gui.qt_settings.value('last_data_location'),
             options=file_dialog_options,
         )
         if data_file_name:
-            self.data_file_path_input.setText(data_file_name)
+            self.data_file_path_input.setText(str(data_file_name))
             self.data_file_path_input.editingFinished.emit()
             # Cache data folder for the next time a file is selected
-            data_folder = Path(data_file_name).parent.as_posix()
+            data_folder = Path(data_file_name[0]).parent.as_posix()
             self.gui.qt_settings.setValue('last_data_location', data_folder)
 
     def set_data_file_path_from_drag_and_drop(self, filename):
-        if Path(filename).suffix in ['.bin', '.dat', '.bat', '.raw']:
-            self.data_file_path_input.setText(filename)
+        if not isinstance(filename, list): filename = [filename]
+        if Path(filename[0]).suffix in ['.bin', '.dat', '.bat', '.raw']:
+            self.data_file_path_input.setText(str(filename))
             self.data_file_path_input.editingFinished.emit()
-            logger.info(f"File at location: {filename} is ready to load!")
-
         else:
             message = (
-                "Only .bin, .dat, .bat, and .raw files accepted as binary, "
-                "the data conversion tool will be opened instead..."
+                "Only .bin, .dat, .bat, and .raw files accepted. Use the "
+                "file conversion tool instead."
                 )
             QtWidgets.QMessageBox.warning(
                 self.parent(),
@@ -403,9 +468,7 @@ class SettingsBox(QtWidgets.QGroupBox):
                 QtWidgets.QMessageBox.StandardButton.Ok,
                 QtWidgets.QMessageBox.StandardButton.Ok,
             )
-            self.gui.converter.filename = filename
-            self.gui.converter.filename_input.setText(filename)
-            self.gui.converter.show()
+
 
     def open_data_converter(self):
         self.gui.converter.show()
@@ -432,46 +495,66 @@ class SettingsBox(QtWidgets.QGroupBox):
         self.results_directory_path = results_directory
         self.gui.qt_settings.setValue('results_dir', results_directory)
 
-        if self.check_settings():
-            self.enable_load()
-        else:
-            self.disable_load()
+        self.check_load()
 
     def on_data_file_path_changed(self):
-        data_file_path = Path(self.data_file_path_input.text())
-        try:
-            assert self.check_valid_binary_path(data_file_path)
+        self.path_check = None
+        text = self.data_file_path_input.text()
+        file_list = ast.literal_eval(text)
+        data_paths = [Path(f) for f in file_list]
 
-            parent_folder = data_file_path.parent
+        if self.check_valid_binary_path(data_paths):
+            parent_folder = data_paths[0].parent
             results_folder = parent_folder / "kilosort4"
             self.results_directory_input.setText(results_folder.as_posix())
             self.results_directory_input.editingFinished.emit()
-            self.data_file_path = data_file_path
-            self.gui.qt_settings.setValue('data_file_path', data_file_path)
+            self.data_file_path = data_paths
+            self.gui.qt_settings.setValue('data_file_path', data_paths)
 
             if self.check_settings():
                 self.enable_load()
                 self.dataChanged.emit()
-
-        except AssertionError:
-            logger.exception("Please select a valid binary file path.")
+            else:
+                self.disable_load()
+            self.gui.qt_settings.setValue('load_as_wrapper', False)
+            self.gui.file_object = None
+            self.use_file_object = False
+        else:
+            print("Please select a valid binary file path(s).")
             self.disable_load()
 
     def check_valid_binary_path(self, filename):
+        if self.path_check is not None:
+            # Flag is set to False when path changes, this is to avoid checking
+            # the path repeatedly for no reason.
+            return self.path_check
+
         if filename is None:
             print('Binary path is None.')
-            return False
+            check = False
         else:
-            f = Path(filename)
-            if f.exists() and f.is_file():
-                if f.suffix in _ALLOWED_FILE_TYPES or self.use_file_object:
-                    return True
+            if not isinstance(filename, list): filename = [filename]
+            for p in filename:
+                f = Path(p)
+                if not f.exists():
+                    print(f'Binary file does not exist at:\n{f}.')
+                    check = False
+                    break
+                elif not f.is_file():
+                    print(f'Path for binary file is not a file:\n{f}.')
+                    check = False
+                    break
                 else:
-                    print(f'Binary file has invalid suffix. Must be {_ALLOWED_FILE_TYPES}')
-                    return False
-            else:
-                print('Binary file does not exist at that path.')
-                return False
+                    if f.suffix in _ALLOWED_FILE_TYPES or self.use_file_object:
+                        check = True
+                    else:
+                        print(f"Binary file has invalid suffix. "
+                               "Must be {_ALLOWED_FILE_TYPES}")
+                        check = False
+                        break
+
+        self.path_check = check
+        return check
 
     def disable_all_input(self, value):
         for button in self.buttons:
@@ -485,7 +568,8 @@ class SettingsBox(QtWidgets.QGroupBox):
 
     def disable_load(self):
         self.load_settings_button.setDisabled(True)
-        self.load_disabled = True
+        self.load_enabled = False
+        self.gui.disable_run()
 
     def enable_preview_probe(self):
         self.probe_preview_button.setEnabled(True)
@@ -502,22 +586,35 @@ class SettingsBox(QtWidgets.QGroupBox):
             "data_dtype": self.data_dtype,
             }
         for k in list(MAIN_PARAMETERS.keys()):
-            self.settings[k] = getattr(self, k)
+            v = getattr(self, k)
+            self.settings[k] = v
+            self.update_setting_color(k, v, MAIN_PARAMETERS)
         for k in list(EXTRA_PARAMETERS.keys()):
-            self.settings[k] = getattr(self.extra_parameters_window, k)
+            v = getattr(self.extra_parameters_window, k)
+            self.settings[k] = v
+            self.update_setting_color(k, v, EXTRA_PARAMETERS, extras=True)
 
+        if self.probe_layout is None:
+            return False
         if not self.check_valid_binary_path(self.data_file_path):
             return False
 
-        none_allowed = [
-            'dmin', 'nt0min', 'max_channel_distance', 'x_centers',
-            'shift', 'scale'
-            ]
         for k, v in self.settings.items():
-            if v is None and k not in none_allowed:
+            if v is None and k not in _NONE_ALLOWED:
                 logger.info(f'`None` not allowed for parameter {k}.')
                 return False
         return True
+
+    def update_setting_color(self, k, v, d, extras=False):
+        o = self.extra_parameters_window if extras else self
+        if v is None and k not in _NONE_ALLOWED:
+            c = "color : red"
+        elif v != d[k]['default']:
+            c = "color : yellow"
+        else:
+            c = "color : white"
+        getattr(o, f'{k}_text').setStyleSheet(c)
+        getattr(o, f'{k}_input').setStyleSheet(c)
     
     @QtCore.Slot()
     def update_parameter(self):
@@ -538,18 +635,19 @@ class SettingsBox(QtWidgets.QGroupBox):
 
             else:
                 self.settingsUpdated.emit()
+        else:
+            self.disable_load()
 
     def get_probe_template_args(self):
         epw = self.extra_parameters_window
-        template_args = [
-            epw.nearest_chans, epw.dmin, epw.dminx, 
-            epw.max_channel_distance, epw.x_centers, self.gui.device
-            ]
+        template_args = [getattr(epw, k) for k in _PROBE_SETTINGS]
         return template_args
 
     @QtCore.Slot()
     def show_probe_layout(self):
-        if self.check_settings:
+        if self.probe_layout is None:
+            pass
+        elif not self.pause_checks and self.check_settings:
             self.previewProbe.emit()
         else:
             logger.info("Cannot preview probe layout, invalid settings.")
@@ -568,9 +666,7 @@ class SettingsBox(QtWidgets.QGroupBox):
                 self.n_chan_bin_input.editingFinished.emit()
 
                 self.enable_preview_probe()
-
-                if self.check_settings():
-                    self.enable_load()
+                self.check_load()
             except MatReadError:
                 logger.exception("Invalid probe file!")
                 self.disable_load()
@@ -583,15 +679,9 @@ class SettingsBox(QtWidgets.QGroupBox):
                 probe_name = dialog.get_map_name()
                 probe_layout = dialog.get_probe()
 
-                probe_name = probe_name + ".prb"
-                probe_prb = create_prb(probe_layout)
-                probe_path = Path(self.gui.new_probe_files_path).joinpath(probe_name)
-                with open(probe_path, "w+") as probe_file:
-                    str_dict = pprint.pformat(
-                        probe_prb, indent=4, compact=False,
-                    )
-                    str_prb = f"""channel_groups = {str_dict}"""
-                    probe_file.write(str_prb)
+                probe_name = probe_name + ".json"
+                probe_path = Path(self.gui.new_probe_files_path) / probe_name
+                save_probe(probe_layout, probe_path)
                 assert probe_path.exists()
 
                 self.populate_probe_selector()
@@ -628,20 +718,12 @@ class SettingsBox(QtWidgets.QGroupBox):
                     )
 
                     if save_probe_file == QtWidgets.QMessageBox.Yes:
-                        probe_prb = create_prb(probe_layout)
-
-                        probe_name = probe_path.with_suffix(".prb").name
+                        probe_name = probe_path.with_suffix(".json").name
                         new_probe_path = (
                             Path(self.gui.new_probe_files_path) / probe_name
                         )
-
                         if not new_probe_path.exists():
-                            with open(new_probe_path, "w+") as probe_file:
-                                str_dict = pprint.pformat(
-                                    probe_prb, indent=4, compact=False
-                                )
-                                str_prb = f"""channel_groups = {str_dict}"""
-                                probe_file.write(str_prb)
+                            save_probe(probe_layout, new_probe_path)
 
                             self.populate_probe_selector()
                             self.probe_layout_selector.setCurrentText(probe_name)
@@ -658,9 +740,7 @@ class SettingsBox(QtWidgets.QGroupBox):
                         self.n_chan_bin_input.editingFinished.emit()
 
                         self.enable_preview_probe()
-
-                        if self.check_settings():
-                            self.enable_load()
+                        self.check_load()
 
                 except AssertionError:
                     logger.exception(
@@ -698,18 +778,28 @@ class SettingsBox(QtWidgets.QGroupBox):
         # Remove brackets and white space if present, convert to list of ints.
         self.bad_channels = self.get_bad_channels()
         self.gui.qt_settings.setValue('bad_channels', self.bad_channels)
+        if not self.pause_checks:
+            self.previewProbe.emit()
 
-        # Trigger update so that probe layout in main gets updated, then
-        # refresh probe view.
-        self.update_settings()
-        self.previewProbe.emit()
+    @QtCore.Slot()
+    def update_shank_idx(self):
+        # Remove brackets and white space if present, convert to list of floats.
+        text = self.shank_idx_input.text()
+        text = text.replace(']','').replace('[','').replace(' ','')
+        if len(text) > 0 and text.lower() != 'none':
+            idx = float(text)
+        else:
+            idx = None
+        self.shank_idx = idx
+        self.gui.qt_settings.setValue('shank_idx', self.shank_idx)
 
+        if not self.pause_checks:
+            self.previewProbe.emit()
 
     def on_data_dtype_selected(self, data_dtype):
         self.data_dtype = data_dtype
         self.gui.qt_settings.setValue('data_dtype', data_dtype)
-        if self.check_settings():
-            self.enable_load()
+        self.check_load()
 
     def on_device_selected(self, device):
         num_gpus = torch.cuda.device_count()
@@ -719,8 +809,7 @@ class SettingsBox(QtWidgets.QGroupBox):
         else:
             device_id = f'cuda:{selector_index}'
         self.gui.device = torch.device(device_id)
-        if self.check_settings():
-            self.enable_load()
+        self.check_load()
 
     def populate_probe_selector(self):
         self.probe_layout_selector.clear()
@@ -732,7 +821,7 @@ class SettingsBox(QtWidgets.QGroupBox):
             probes = [
                 probe
                 for probe in probes
-                if probe.endswith(".mat") or probe.endswith(".prb")
+                if probe.endswith(".mat") or probe.endswith(".prb") or probe.endswith(".json")
             ]
             probes_list.extend(probes)
 
@@ -744,6 +833,7 @@ class SettingsBox(QtWidgets.QGroupBox):
         self.probe_layout_selector.setCurrentIndex(0)
         self.gui.qt_settings.setValue('probe_layout', None)
         self.gui.qt_settings.setValue('probe_name', None)
+        self.gui.probe_layout = None
         self.disable_preview_probe()
 
     def populate_dtype_selector(self):
@@ -764,9 +854,13 @@ class SettingsBox(QtWidgets.QGroupBox):
     def estimate_total_channels(self, num_channels):
         if self.check_valid_binary_path(self.data_file_path):
             if self.use_file_object:
-                return self.gui.file_object.c
+                try:
+                    c = self.gui.file_object.c
+                except:
+                    c = None
+                return c
             
-            memmap_data = np.memmap(self.data_file_path, dtype=self.data_dtype)
+            memmap_data = np.memmap(self.data_file_path[0], dtype=self.data_dtype)
             data_size = memmap_data.size
 
             test_n_channels = np.arange(num_channels, num_channels + 31)
@@ -790,22 +884,22 @@ class SettingsBox(QtWidgets.QGroupBox):
         else:
             return num_channels
 
-    def preapre_for_new_context(self):
-        pass
-
     def reset(self):
         self.data_file_path_input.clear()
         self.data_file_path = None
+        self.gui.data_path = None
+        self.path_check = None
         self.gui.qt_settings.setValue('data_file_path', None)
         self.results_directory_input.clear()
         self.results_directory_path = None
+        self.gui.results_directory = None
         self.gui.qt_settings.setValue('results_dir', None)
         self.clear_probe_selection()
         self.set_default_field_values()
         self.disable_load()
 
     def check_load(self):
-        if self.check_settings():
+        if not self.pause_checks and self.check_settings():
             self.enable_load()
         else:
             self.disable_load()
@@ -835,12 +929,12 @@ class ExtraParametersWindow(QtWidgets.QWidget):
                 heading = p['step']
                 heading_label = QtWidgets.QLabel(heading)
                 heading_label.setFont(QtGui.QFont('Arial', 14))
-                self.heading_labels.append(heading_label)
-                if len(self.heading_labels) % 4 == 0:
+                if heading in ['spike detection', 'clustering']:
                     hgap = QtWidgets.QLabel('         ')
-                    layout.addWidget(hgap, row_count, 5, 1, 1)
+                    layout.addWidget(hgap, row_count, col+5, 1, 1)
                     row_count = 0
-                    col = 6
+                    col += 6
+                self.heading_labels.append(heading_label)
                 row_count += 1
                 gap = QtWidgets.QLabel('')
                 gap.setFont(QtGui.QFont('Arial', 4))
@@ -852,6 +946,8 @@ class ExtraParametersWindow(QtWidgets.QWidget):
             layout.addWidget(getattr(self, f'{k}_input'), row_count, col+3, 1, 2)
             inp = getattr(self, f'{k}_input')
             inp.editingFinished.connect(self.update_parameter)
+            if k in _PROBE_SETTINGS:
+                inp.editingFinished.connect(self.main_settings.show_probe_layout)
 
         self.setLayout(layout)
 
@@ -885,14 +981,10 @@ def _check_parameter(sender_obj, main_obj, k, p):
         main_obj.gui.qt_settings.setValue(k, v)
         reset = False
 
-        if main_obj.check_settings() and not main_obj.load_enabled:
-            main_obj.enable_load()
-
     except ValueError:
         logger.exception(
             f"Invalid input!\n {p['gui_name']} must be of type: {p['type']}."
         )
-        main_obj.disable_load()
 
     except AssertionError:
         logger.exception(
@@ -900,13 +992,14 @@ def _check_parameter(sender_obj, main_obj, k, p):
             f"{p['min']} <= {p['gui_name']} <= {p['max']},\n"
             f"{p['gui_name']} != {p['exclude']}"
         )
-        main_obj.disable_load()
 
     finally:
         if reset:
             # Invalid input, change back to what it was before.
             v = getattr(sender_obj, k)
             getattr(sender_obj, f'{k}_input').setText(str(v))
+
+        main_obj.check_load()
 
 
 def _str_to_type(string, dtype):

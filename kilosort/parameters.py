@@ -20,7 +20,7 @@ MAIN_PARAMETERS = {
     # NOTE: n_chan_bin must be specified by user when running through API
     'n_chan_bin': {  
         'gui_name': 'number of channels', 'type': int, 'min': 0, 'max': np.inf,
-        'exclude': [0], 'default': 385, 'step': 'data',
+        'exclude': [0], 'default': None, 'step': 'data',
         'description':
             """
             Total number of channels in the binary file, which may be different
@@ -107,8 +107,8 @@ EXTRA_PARAMETERS = {
         'exclude': [], 'default': 61, 'step': 'data',
         'description':
             """
-            Number of samples per waveform. Also size of symmetric padding
-            for filtering.
+            Number of samples per waveform and the size of symmetric padding
+            for filtering. Note that `nt` must be an odd number.
             """
     },
 
@@ -137,6 +137,17 @@ EXTRA_PARAMETERS = {
             that data is roughly in the range -100 to +100.
             
             If set, data will be `data = data*scale + shift`.
+            """
+    },
+
+    'batch_downsampling': {
+        'gui_name': 'batch downsampling', 'type': int, 'min': 1, 'max': np.inf,
+        'exclude': [], 'default': 1, 'step': 'data',
+        'description':
+            """
+            Number of batches skipped for each batch used for sorting. For example,
+            if `batch_downsampling = 10`, then only every 10th batch will be used.
+            In general, this should be left as the default (using all batches).
             """
     },
 
@@ -289,13 +300,23 @@ EXTRA_PARAMETERS = {
 
     'max_channel_distance': {
         'gui_name': 'max channel distance', 'type': float, 'min': 1,
-        'max': np.inf, 'exclude': [], 'default': None, 'step': 'spike detection',
+        'max': np.inf, 'exclude': [], 'default': 32, 'step': 'spike detection',
         'description':
             """
             Templates farther away than this from their nearest channel will
             not be used. Also limits distance between compared channels during
             clustering.
             """
+    },
+
+    'max_peels': {
+        'gui_name': 'max peels', 'type': int, 'min': 1, 'max': 10000, 'exclude': [],
+        'default': 100, 'step': 'spike detection',
+        'description':
+        """
+        Number of iterations to do over each batch of data in the matching
+        pursuit step. More iterations may detect more overlapping spikes.
+        """
     },
 
     'templates_from_data': {
@@ -360,13 +381,63 @@ EXTRA_PARAMETERS = {
             """
     },
 
+    'cluster_neighbors': {
+        'gui_name': 'cluster neighbors', 'type': int, 'min': 2, 'max': np.inf,
+        'exclude': [], 'default': 10, 'step': 'clustering',
+        'description':
+            """
+            Number of nearest spike neighbors to search for in
+            `clustering_qr.neigh_mat` when building the adjacency matrix that
+            defines the graph for clustering. Note that changes to this parameter
+            will affect resource usage and sorting time.
+            """ 
+    },
+
     'cluster_downsampling': {
         'gui_name': 'cluster downsampling', 'type': int, 'min': 1, 'max': np.inf,
         'exclude': [], 'default': 20, 'step': 'clustering',
         'description':
             """
-            Inverse fraction of nodes used as landmarks during clustering
-            (can be 1, but that slows down the optimization). 
+            Inverse fraction of spikes used as landmarks during clustering. By
+            default, all spikes are used up to a maximum of
+            `max_cluster_subset=25000`.
+
+            The old default behavior (version < 4.1.0) is
+            equivalent to `max_cluster_subset=None, cluster_downsampling=20`.
+            Versions 4.1.0 through 4.1.2 defaulted to
+            `max_cluster_subset=25000, cluster_downsampling=1`.
+
+            The default value was reverted to 20 in version 4.1.3 because many
+            users reported memory issues with the new default. We have found
+            that values betwen 5-20 also work well in most cases.
+            """
+    },
+
+    'max_cluster_subset': {
+        'gui_name': 'max cluster subset', 'type': int, 'min': 1, 'max': np.inf,
+        'exclude': [np.inf], 'default': 25000, 'step': 'clustering',
+        'description':
+            """
+            Maximum number of spikes to use when searching for nearest neighbors
+            to build the graph used for clustering. Within each clustering center,
+            only a subset of spikes is searched with the size determined by
+            `cluster_downsampling` and the total number of spikes. This sets
+            a maximum on the size of that subset, so that it will not grow without
+            bound for very long recordings. Using a very large number of spikes
+            is not necessary and causes performance bottlenecks.
+
+            Use `max_cluster_subset = None` if you do not want a limit on
+            the subset size.
+            
+            The old default behavior (version < 4.1.0) is
+            equivalent to `max_cluster_subset=None, cluster_downsampling=20`.
+            Versions 4.1.0 through 4.1.2 defaulted to
+            `max_cluster_subset=25000, cluster_downsampling=1`.
+
+            Note: In practice, the actual number of spikes used may increase or
+            decrease slightly while staying under the maximum. This happens
+            because the maximum is set by adjusting `cluster_downsampling` on the
+            fly so that it results in a set no larger than the given size.
             """
     },
 
@@ -383,6 +454,16 @@ EXTRA_PARAMETERS = {
             """
     },
 
+    'cluster_init_seed': {
+        'gui_name': 'cluster init seed', 'type': int, 'min': 1, 'max': np.inf,
+        'exclude': [], 'default': 5, 'step': 'clustering',
+        'description':
+            """
+            Random seed for kmeans++ algorithm used to initialize the graph
+            for clustering.
+            """
+    },
+
 
     ### POSTPROCESSING
     'duplicate_spike_ms': {
@@ -396,6 +477,18 @@ EXTRA_PARAMETERS = {
             NOTE: this was formerly handled by `duplicate_spike_bins`, which has
             been deprecated. The new default of 0.25ms is equivalent to the old
             default of 7 bins for a 30kHz sampling rate.
+            """
+    },
+
+    'position_limit': {
+        'gui_name': 'position limit', 'type': float, 'min': 0, 'max': np.inf,
+        'exclude': [], 'default': 100, 'step': 'postprocessing',
+        'description':
+            """
+            Maximum distance (in microns) between channels that can be used
+            to estimate spike positions in `postprocessing.compute_spike_positions`.
+            This does not affect spike sorting, only how positions are estimated
+            after sorting is complete.
             """
     },
 }
@@ -420,3 +513,33 @@ main_defaults = {k: v['default'] for k, v in MAIN_PARAMETERS.items()}
 extra_defaults = {k: v['default'] for k, v in EXTRA_PARAMETERS.items()}
 # In the format expected by `run_kilosort`
 DEFAULT_SETTINGS = {**main_defaults, **extra_defaults}
+
+
+def compare_settings(settings):
+    """Find settings values that differ from the defaults.
+    
+    Parameters
+    ----------
+    settings : dict
+        Formatted the same as `DEFAULT_SETTINGS`.
+    
+    Returns
+    -------
+    modified_settings : dict
+        Formatted as above, but only contains keys with values that differ
+        from the defaults.
+    extra_keys : list
+        List of keys that appear in `settings` but not `DEFAULT_SETTINGS`.
+        These keys are *not* included in `modified_settings`.
+
+    """
+    modified_settings = {}
+    extra_keys = []
+
+    for k, v in settings.items():
+        if k in DEFAULT_SETTINGS:
+            if v != DEFAULT_SETTINGS[k]:
+                modified_settings[k] = v
+        else:
+            extra_keys.append(k)
+    return modified_settings, extra_keys
