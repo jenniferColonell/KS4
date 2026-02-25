@@ -4,10 +4,10 @@ channels:
   - nvidia
   - conda-forge
 dependencies:
-  - python=3.9.*
+  - python=3.11.*
   - pip
   - psutil
-  - numpy>=1.20.0,<2.0.0
+  - numpy
   - scipy
   - scikit-learn
   - tqdm
@@ -16,7 +16,7 @@ dependencies:
   - libblas=*=*mkl
   - pytest
   # CUDA
-  - pynvml
+  - nvidia-ml-py
   # GUI
   - matplotlib
   - pip:
