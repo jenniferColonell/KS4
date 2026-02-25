@@ -160,7 +160,7 @@ def plot_spike_positions(plot_window, clu, is_refractory, settings):
     # 10 colors in palette, last one is gray for non-frefractory
     clu = clu.copy()
     bad_units = np.unique(clu)[is_refractory == 0]
-    bad_idx = np.in1d(clu, bad_units)
+    bad_idx = np.isin(clu, bad_units)
     clu = np.mod(clu, 9)
     clu[bad_idx] = 9
     cm = (PROBE_PLOT_COLORS*255).astype('int')  # convert to pyqtgraph format

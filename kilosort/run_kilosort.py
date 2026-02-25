@@ -1,4 +1,5 @@
 import time
+import os
 from pathlib import Path
 import logging
 import warnings
@@ -209,7 +210,7 @@ def _sort(filename, results_dir, probe, settings, data_dtype, device, do_CAR,
     """
 
     try:
-        logger.info(f"Kilosort version {kilosort.__version__}")
+        logger.info(f"Kilosort version {kilosort.__version__}, jic fork")
         logger.info(f"Python version {platform.python_version()}")
         logger.info('-'*40)
 
@@ -229,7 +230,15 @@ def _sort(filename, results_dir, probe, settings, data_dtype, device, do_CAR,
         if device != torch.device('cpu'):
             memory = torch.cuda.get_device_properties(device).total_memory/1024**3
             logger.info(f'Using CUDA device: {torch.cuda.get_device_name()} {memory:.2f}GB')
-
+        
+        logger.info('Torch determinism parameters: ')
+        logger.info(f'Torch deterministic algorithms enabled: {torch.are_deterministic_algorithms_enabled()}')
+        logger.info(f"torch.backends.cudnn.deterministic: {torch.backends.cudnn.deterministic}")
+        logger.info(f"torch.backends.cudnn.benchmark: {torch.backends.cudnn.benchmark}")
+        cublas_config = os.environ.get("CUBLAS_WORKSPACE_CONFIG", "Not set")
+        logger.info(f"CUBLAS_WORKSPACE_CONFIG: {cublas_config}")
+        
+        
         logger.info('-'*40)
         if len(filename) == 1:
             logger.info(f"Sorting {filename}")

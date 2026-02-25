@@ -10,6 +10,7 @@ import torch
 from sklearn.cluster import KMeans
 from sklearn.decomposition import TruncatedSVD
 from tqdm import tqdm
+from threadpoolctl import threadpool_limits
 
 from kilosort.utils import template_path, log_performance
 
@@ -81,7 +82,19 @@ def extract_wPCA_wTEMP(ops, bfile, nt=61, twav_min=20, Th_single_ch=6, nskip=25,
         if nthread is not None:
             new_nthread = min(int(nthread), new_nthread)
         os.environ['OMP_NUM_THREADS'] = str(new_nthread)
-        model = KMeans(n_clusters=ops['settings']['n_templates'], n_init = 10).fit(clips)
+        # os.environ['MKL_NUM_THREADS'] = str('1')
+        # os.environ['OPENBLAS_NUM_THREADS'] = str('1')
+        # logger.info(f"OMP_NUM_THREADS in extract_wPCA_wTEMP: {os.environ.get('OMP_NUM_THREADS')}")
+        # logger.info(f"MKL_NUM_THREADS, OPENBLAS_NUM_THREADS in wPCAS_wTEMP: {os.environ.get('MKL_NUM_THREADS')}, {os.environ.get('OPENBLAS_NUM_THREADS')} ")
+        with threadpool_limits(limits=1):
+            model = KMeans(n_clusters=ops['settings']['n_templates'], 
+                           init = 'k-means++',
+                           n_init=1,
+                           algorithm='lloyd',
+                           random_state = 0,
+                           max_iter = 300,
+                           tol = 1e-4
+                           ).fit(clips)
         wTEMP = torch.from_numpy(model.cluster_centers_).to(device).float()
         wTEMP = wTEMP / (wTEMP**2).sum(1).unsqueeze(1)**.5
         if nthread is not None:
