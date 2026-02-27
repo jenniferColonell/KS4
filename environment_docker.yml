@@ -15,12 +15,11 @@ dependencies:
   - faiss-cpu
   - libblas=*=*mkl
   - pytest
+  - pyqt6
+  - qtpy
+  - pyqtgraph>=0.13.0
   # CUDA
   - nvidia-ml-py
   # GUI
   - matplotlib
-  - pip:
-    - pyqtgraph>=0.13.0
-    - qtpy
-    - pyqt6
-    - pyqt6.sip
+
