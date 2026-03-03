@@ -30,14 +30,16 @@ docs_deps = [
 ]
 
 ### remove torch install if already installed
-try:
-    import torch
-    a = torch.ones(2, 3)
-    version = int(torch.__version__.split(".")[1])
-    if version >= 6:
-        install_deps.remove("torch>=1.6")
-except:
-    pass
+### removed in this fork to avoid issues when building into a container
+### this may also be skipped automatically if pip install uses --no-dep
+###try:
+###    import torch
+###    a = torch.ones(2, 3)
+###    version = int(torch.__version__.split(".")[1])
+###    if version >= 6:
+###        install_deps.remove("torch>=1.6")
+###except:
+###    pass
 
 ### remove pyqt6 install if other qt backend installed
 try:

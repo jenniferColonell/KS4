@@ -1,6 +1,5 @@
 name: kilosort
 channels:  
-  - pytorch
   - nvidia
   - conda-forge
 dependencies:
@@ -12,7 +11,7 @@ dependencies:
   - scikit-learn
   - tqdm
   - numba
-  - faiss-cpu
+  - fsspec
   - libblas=*=*mkl
   - pytest
   - pyqt6
@@ -22,4 +21,3 @@ dependencies:
   - nvidia-ml-py
   # GUI
   - matplotlib
-
