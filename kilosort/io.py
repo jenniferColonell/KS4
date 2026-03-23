@@ -392,6 +392,8 @@ def save_to_phy(st, clu, tF, Wall, probe, ops, imin, results_dir=None,
     # This will momentarily copy tF which is pretty large, but it's on CPU
     # so the extra memory hopefully won't be an issue.
     tF = tF[kept_spikes]
+    # Save the original tF if needed
+    # torch.save(tF, results_dir / 'tF_orig.pt')
     pc_features, pc_feature_ind = make_pc_features(
         ops, spike_templates, spike_clusters, tF
         )

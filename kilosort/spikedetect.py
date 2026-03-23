@@ -91,7 +91,7 @@ def extract_wPCA_wTEMP(ops, bfile, nt=61, twav_min=20, Th_single_ch=6, nskip=25,
                            init = 'k-means++',
                            n_init=1,
                            algorithm='lloyd',
-                           random_state = 0,
+                           random_state = ops['cluster_init_seed'],
                            max_iter = 300,
                            tol = 1e-4
                            ).fit(clips)

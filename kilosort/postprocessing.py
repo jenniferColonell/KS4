@@ -4,7 +4,8 @@ import numpy as np
 import torch
 
 from kilosort.clustering_qr import xy_templates, get_data_cpu
-
+import logging
+logger = logging.getLogger(__name__)
 
 @njit("(int64[:], int32[:], int32)")
 def remove_duplicates(spike_times, spike_clusters, dt=15):
@@ -62,7 +63,7 @@ def compute_spike_positions(st, tF, ops):
     return xs, ys
 
 
-def make_pc_features(ops, spike_templates, spike_clusters, tF):
+def make_pc_features(ops, spike_templates, spike_clusters, tF, verbose=False):
     '''Get PC Features and corresponding indices for export to Phy.
 
     NOTE: This function will update tF in-place!
@@ -116,13 +117,24 @@ def make_pc_features(ops, spike_templates, spike_clusters, tF):
             )
 
         # Take mean of features across spikes, find channels w/ largest norm
-        spike_mean = Xd.mean(0)
+        clu_ind = np.where(spike_clusters==i)[0]
+        igood_clu = np.where(np.isin(igood.cpu().numpy(), clu_ind))[0]
+        Xd_clu = Xd[igood_clu,:,:]
+        spike_mean = Xd_clu.mean(0)
         chan_norm = torch.linalg.norm(spike_mean, dim=1)
         sorted_chans, ind = torch.sort(chan_norm, descending=True)
+        if verbose:
+            logger.debug(f'uid: {i}, template ids: {iunq}')
+            logger.debug(f'Xd shape: {Xd.shape}')              
+            logger.debug(f'clu_ind_shape: {clu_ind.shape}, igood_clus_shape: {igood_clu.shape}')
+            logger.debug(f'num igood: {igood.size()}, num spikes in cluster: {(spike_clusters==i).sum()}')
         # Assign features to overwrite tF in-place
-        tF[igood,:] = Xd[:, ind[:n_chans], :]
+        tF[clu_ind,:] = Xd_clu[:, ind[:n_chans], :]
         # Save channel inds for phy
         feature_ind[i,:] = ichan[ind[:n_chans]].cpu().numpy()
+        if verbose:            
+            logger.debug(f'feature_chans: {feature_ind[i,:]}')
+        
 
     # Swap last 2 dimensions to get ordering Phy expects
     tF = torch.permute(tF, (0, 2, 1))

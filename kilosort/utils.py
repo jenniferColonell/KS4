@@ -40,6 +40,8 @@ def template_path(basename='wTEMP.npz'):
 
 def cache_template_path(basename):
     cached_file = os.fspath(DOWNLOADS_DIR.joinpath(basename)) 
+    logger.info(f'expected template file path: {cached_file}')
+    logger.info(f'template file found: {os.path.exists(cached_file)}')
     if not os.path.exists(cached_file):
         url = 'https://osf.io/download/6807fb5958b763aae139aa60/'
         logger.info('Downloading: "{}" to {}\n'.format(url, cached_file))
