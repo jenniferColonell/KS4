@@ -304,8 +304,8 @@ def _sort(filename, results_dir, probe, settings, data_dtype, device, do_CAR,
                 gui_sorter.st0 = st0
                 gui_sorter.plotDataReady.emit('drift')
             else:
-                kplots.plot_drift_amount(ops, results_dir)
-                kplots.plot_drift_scatter(st0, results_dir)
+                kplots.plot_drift_amount(ops, results_dir, tmin=settings['tmin'])
+                kplots.plot_drift_scatter(st0, results_dir, tmin=settings['tmin'])
 
         # Sort spikes and save results
         st,tF, Wall0, clu0 = detect_spikes(

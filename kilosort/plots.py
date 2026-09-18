@@ -20,7 +20,7 @@ PROBE_PLOT_COLORS = np.array([
     ])
 
 
-def plot_drift_amount(ops, results_dir):
+def plot_drift_amount(ops, results_dir, tmin=0):
     plt.style.use('dark_background')
     fig, ax = plt.subplots(1, 1, figsize=(8,8))
     dshift = ops['dshift']
@@ -28,7 +28,7 @@ def plot_drift_amount(ops, results_dir):
 
     fs = settings['fs']
     NT = settings['batch_size']
-    t = np.arange(dshift.shape[0])*(NT/fs)
+    t = np.arange(dshift.shape[0])*(NT/fs) + tmin
     for i in range(dshift.shape[1]):
         color = COLOR_CODES[i % len(COLOR_CODES)]
         ax.plot(t, dshift[:,i], c=color)
@@ -44,12 +44,12 @@ def plot_drift_amount(ops, results_dir):
     plt.close(fig)
 
 
-def plot_drift_scatter(st0, results_dir):
+def plot_drift_scatter(st0, results_dir, tmin=0):
     fig, ax = plt.subplots(1, 1, figsize=(30,14))
 
-    x = st0[:,0]  # spike time in seconds
-    y = st0[:,1]  # depth of spike center in microns
-    z = st0[:,2]  # spike amplitude (data)
+    x = st0[:,0] + tmin  # spike time in seconds
+    y = st0[:,1]         # depth of spike center in microns
+    z = st0[:,2]         # spike amplitude (data)
     z[z < 10] = 10
     z[z > 100] = 100
     colors = np.empty((x.shape[0], 4), dtype=float)
