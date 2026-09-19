@@ -231,7 +231,7 @@ def run_matching(ops, X, U, ctc, device=torch.device('cuda')):
         k+= nsp
 
         #amp = B[iY,iX] 
-
+        # subtract off even, then odd indexed spikes, maybe to avoid interference? 
         n = 2
         for j in range(n):
             Xres[:, iX[j::n] + tiwave]  -= amp[j::n] * torch.einsum('ijk, jl -> kil', U[iY[j::n,0]], W)

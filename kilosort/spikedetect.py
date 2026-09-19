@@ -160,13 +160,17 @@ def template_match(X, ops, iC, iC2, weigh, device=torch.device('cuda')):
     ti = torch.arange(Nfilt, device = device)
     tj = torch.arange(nb, device = device)
 
+# loop over chunks of the data convolved with wTEMP
+# for defaults, chunk size is 1500 time points
+# B has dimenstions [n_channels, num templates in wTEMP, NT+padding]
+# weigh includes the weights on each site, [num template sizes, num template centers, num channels in tempalte]
     for t in range(niter):
-        A = torch.einsum('ijk, jklm-> iklm', weigh, B[iC,:, nb*t:nb*(t+1)])        
+        A = torch.einsum('ijk, jklm-> iklm', weigh, B[iC,:, nb*t:nb*(t+1)])  # convolving with the spatial templates      
         A = A.transpose(1,2)
         A = A.reshape(-1, Nfilt, A.shape[-1])
         
         #Aa, imax = torch.max(A, 0) 
-        Aa, imax = torch.max(A.abs(), 0)
+        Aa, imax = torch.max(A.abs(), 0)         # best filter at each timepoint
         imax = (1+imax) * A[imax, ti.unsqueeze(-1), tj[:A.shape[-1]]].sign()
 
         As[:, nb*t:nb*(t+1)] = Aa
@@ -174,10 +178,10 @@ def template_match(X, ops, iC, iC2, weigh, device=torch.device('cuda')):
         Amax = torch.max(Aa[iC2], 0)[0]
         Amaxs[:, nb*t:nb*(t+1)] = Amax
 
-    Amaxs[:,:nt] = 0
+    Amaxs[:,:nt] = 0      # zero out the regions that are padding
     Amaxs[:,-nt:] = 0
-    Amaxs  = max_pool1d(Amaxs.unsqueeze(0), (2*nt0+1), stride = 1, padding = nt0).squeeze(0)
-    xy = torch.logical_and(Amaxs==As, As > ops['Th_universal']).nonzero()
+    Amaxs  = max_pool1d(Amaxs.unsqueeze(0), (2*nt0+1), stride = 1, padding = nt0).squeeze(0)  # get local maxima in windows of 2*nt0+1
+    xy = torch.logical_and(Amaxs==As, As > ops['Th_universal']).nonzero()  # get positions of those local maxima in time
     imax = imaxs[xy[:,0], xy[:,1]]
     amp = As[xy[:,0], xy[:,1]]
 

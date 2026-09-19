@@ -116,7 +116,9 @@ def make_pc_features(ops, spike_templates, spike_clusters, tF, verbose=False):
             dmin=ops['dmin'], dminx=ops['dminx'], ix=ix, merge_dim=False
             )
 
-        # Take mean of features across spikes, find channels w/ largest norm
+        # Take mean of features across spikes in this cluster, note that
+        # it's a subset of all spike found with these detection templates.
+        # Find channels w/ largest norm.
         clu_ind = np.where(spike_clusters==i)[0]
         igood_clu = np.where(np.isin(igood.cpu().numpy(), clu_ind))[0]
         Xd_clu = Xd[igood_clu,:,:]
